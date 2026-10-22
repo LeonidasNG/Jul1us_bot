@@ -33,7 +33,7 @@ ARQUIVO_DADOS = "meus_produtos.json"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 fluxo_cadastro = {}
 
-# Sessão com personificação de navegador Chrome real (evita bloqueios HTTP 403)
+# Sessão simulando navegador Chrome real em nível TLS
 session = curl_requests.Session(impersonate="chrome120")
 
 def tratar_termo(termo):
@@ -53,12 +53,85 @@ def salvar_produtos(produtos):
     with open(ARQUIVO_DADOS, "w", encoding="utf-8") as f:
         json.dump(produtos, f, ensure_ascii=False, indent=2)
 
-def buscar_mercadolivre(termo_original):
+def buscar_mercadolivre_web(termo_original):
+    """Fallback: Scraping direto na página web de busca do Mercado Livre."""
     termo = tratar_termo(termo_original)
-    url = f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=5"
+    url_web = f"https://lista.mercadolivre.com.br/{urllib.parse.quote(termo)}"
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.mercadolivre.com.br/"
+    }
     try:
-        resp = session.get(url, timeout=10)
-        print(f"[ML LOG] Status HTTP: {resp.status_code}")
+        resp = session.get(url_web, headers=headers, timeout=12)
+        print(f"[ML WEB LOG] Status HTTP: {resp.status_code}")
+        
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Seletores para anúncios do Mercado Livre (layout padrão e layout novo)
+            items = soup.select('.poly-card') or soup.select('.ui-search-layout__item') or soup.select('.ui-search-result__content')
+            
+            for item in items:
+                # Título
+                elem_titulo = item.select_one('.poly-component__title') or item.select_one('.ui-search-item__title') or item.select_one('h2')
+                if not elem_titulo:
+                    continue
+                titulo = elem_titulo.get_text().strip()
+                
+                # Link
+                elem_link = item.select_one('a.poly-component__title') or item.select_one('a.ui-search-link') or item.select_one('a')
+                link = elem_link['href'] if elem_link and 'href' in elem_link.attrs else None
+                
+                # Preço
+                elem_preco = item.select_one('.poly-price__current .andes-money-amount__fraction') or item.select_one('.andes-money-amount__fraction')
+                if not elem_preco:
+                    continue
+                preco_str = elem_preco.get_text().replace('.', '').strip()
+                
+                elem_centavos = item.select_one('.andes-money-amount__cents')
+                if elem_centavos:
+                    preco_str += f".{elem_centavos.get_text().strip()}"
+                
+                try:
+                    preco = float(preco_str)
+                except ValueError:
+                    continue
+
+                # Imagem
+                elem_img = item.select_one('img.poly-component__picture') or item.select_one('img.ui-search-result-image__element') or item.select_one('img')
+                imagem = ""
+                if elem_img:
+                    imagem = elem_img.get('data-src') or elem_img.get('src') or ""
+
+                if titulo and preco and link:
+                    return {
+                        "titulo": titulo,
+                        "preco": preco,
+                        "link": link,
+                        "imagem": imagem,
+                        "loja": "Mercado Livre",
+                        "erro": None
+                    }
+            return {"erro": "Não foi possível extrair produtos da página web."}
+        else:
+            return {"erro": f"Servidor Web do Mercado Livre retornou HTTP {resp.status_code}."}
+    except Exception as e:
+        print(f"[ML WEB ERROR] {e}")
+        return {"erro": f"Falha na busca Web: {e}"}
+
+def buscar_mercadolivre(termo_original):
+    # 1. Tentativa via API oficial
+    termo = tratar_termo(termo_original)
+    url_api = f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=5"
+    headers_api = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        resp = session.get(url_api, headers=headers_api, timeout=10)
+        print(f"[ML API LOG] Status HTTP: {resp.status_code}")
         
         if resp.status_code == 200:
             results = resp.json().get("results", [])
@@ -73,12 +146,12 @@ def buscar_mercadolivre(termo_original):
                     "loja": "Mercado Livre",
                     "erro": None
                 }
-            return {"erro": "A API respondeu (200 OK), mas não encontrou anúncios para esta busca."}
-        else:
-            return {"erro": f"O servidor bloqueou a conexão (Status HTTP {resp.status_code})."}
     except Exception as e:
-        print(f"[ML ERROR] {e}")
-        return {"erro": f"Exceção de rede: {e}"}
+        print(f"[ML API EXCEPTION] {e}")
+
+    # 2. Se a API for bloqueada (HTTP 403), aciona o fallback para busca Web direta
+    print("[ML FALLBACK] API bloqueada. Executando busca Web via scraping...")
+    return buscar_mercadolivre_web(termo_original)
 
 def buscar_cupons_disponiveis(termo, loja):
     termo_lower = termo.lower()
@@ -268,5 +341,5 @@ def atualizar_preco_produto(message, idx):
 
 if __name__ == "__main__":
     threading.Thread(target=iniciar_servidor_http, daemon=True).start()
-    print("Bot rodando com o novo token...")
+    print("Bot rodando com sistema de busca por API e Web...")
     bot.infinity_polling()
