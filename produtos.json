@@ -1,0 +1,14 @@
+{
+  "configuracoes": {
+    "telegram_token": "8934299685:AAFnQc6hBF9Um1uhGatlzLROgI33fndAcfQ",
+    "telegram_chat_id": "7496317236"
+  },
+  "buscas": [
+    {
+      "termo": "Smartphone Samsung Galaxy S24 Ultra 256gb",
+      "preco_alvo": 6000.00,
+      "condicoes": ["new"],
+      "lojas": ["mercadolivre"]
+    }
+  ]
+}
