@@ -1,5 +1,4 @@
 import json
-import requests
 import urllib.parse
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,6 +7,7 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import re
+from curl_cffi import requests as curl_requests
 
 # ================= SERVIDOR DE SAÚDE PARA O RENDER =================
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -33,13 +33,8 @@ ARQUIVO_DADOS = "meus_produtos.json"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 fluxo_cadastro = {}
 
-session = requests.Session()
-session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Cache-Control": "no-cache"
-})
+# Sessão com personificação de navegador Chrome real (desconecta bloqueios TLS/HTTP2)
+session = curl_requests.Session(impersonate="chrome120")
 
 def tratar_termo(termo):
     termo_limpo = re.sub(r'[^\w\s]', ' ', termo)
@@ -78,7 +73,7 @@ def buscar_mercadolivre(termo_original):
                     "loja": "Mercado Livre",
                     "erro": None
                 }
-            return {"erro": "A API respondeu, mas não encontrou anúncios para esta busca."}
+            return {"erro": "A API respondeu (200 OK), mas não encontrou anúncios para esta busca."}
         else:
             return {"erro": f"O servidor bloqueou a conexão (Status HTTP {resp.status_code})."}
     except Exception as e:
