@@ -26,14 +26,14 @@ def iniciar_servidor_http():
     server.serve_forever()
 
 # ================= CONFIGURAÇÕES =================
-TELEGRAM_TOKEN = "8934299685:AAFnQc6hBF9Um1uhGatlzLROgI33fndAcfQ"
+TELEGRAM_TOKEN = "8934299685:AAFrnZpC_GavOezAgkpHLgpaxvo7LFeKOUg"
 CHAT_ID_AUTORIZADO = "7496317236"
 ARQUIVO_DADOS = "meus_produtos.json"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 fluxo_cadastro = {}
 
-# Sessão com personificação de navegador Chrome real (desconecta bloqueios TLS/HTTP2)
+# Sessão com personificação de navegador Chrome real (evita bloqueios HTTP 403)
 session = curl_requests.Session(impersonate="chrome120")
 
 def tratar_termo(termo):
@@ -268,5 +268,5 @@ def atualizar_preco_produto(message, idx):
 
 if __name__ == "__main__":
     threading.Thread(target=iniciar_servidor_http, daemon=True).start()
-    print("Bot rodando...")
+    print("Bot rodando com o novo token...")
     bot.infinity_polling()
