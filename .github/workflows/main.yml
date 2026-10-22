@@ -1,0 +1,24 @@
+name: Rodar Robo de Precos
+
+on:
+  schedule:
+    - cron: '0 * * * *' 
+  workflow_dispatch:    
+
+jobs:
+  buscar_precos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pegar os arquivos
+        uses: actions/checkout@v3
+
+      - name: Ligar o Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Instalar ferramentas
+        run: pip install -r requirements.txt
+
+      - name: Rodar o robô
+        run: python monitor.py
