@@ -7,13 +7,14 @@ from bs4 import BeautifulSoup
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
+import cloudscraper
 
 # ================= SERVIDOR DE SAÚDE PARA O RENDER =================
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot Multi-Lojas OK")
+        self.wfile.write(b"Bot Multi-Lojas Anti-Block OK")
 
 def iniciar_servidor_http():
     port = int(os.environ.get("PORT", 10000))
@@ -28,10 +29,10 @@ ARQUIVO_DADOS = "meus_produtos.json"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 fluxo_cadastro = {}
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
-}
+# Criador de requisições que burla o Cloudflare
+scraper = cloudscraper.create_scraper(
+    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+)
 
 # ================= GESTÃO DE ARQUIVOS =================
 def carregar_produtos():
@@ -47,11 +48,11 @@ def salvar_produtos(produtos):
     with open(ARQUIVO_DADOS, "w", encoding="utf-8") as f:
         json.dump(produtos, f, ensure_ascii=False, indent=2)
 
-# ================= MOTORES DE BUSCA MULTI-LOJAS =================
+# ================= MOTORES DE BUSCA =================
 def buscar_mercadolivre(termo):
-    url = f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=3"
+    url = f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=5"
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=5)
+        resp = scraper.get(url, timeout=10)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
             if results:
@@ -64,19 +65,21 @@ def buscar_mercadolivre(termo):
                     "imagem": imagem,
                     "loja": "Mercado Livre"
                 }
+        else:
+            print(f"ML retornou status: {resp.status_code}")
     except Exception as e:
         print(f"Erro no Mercado Livre: {e}")
     return None
 
 def buscar_buscape(termo):
-    """Busca agregada no Buscapé (Magalu, Amazon, Shopee, KaBuM, FastShop, Casas Bahia, etc.)"""
     url = f"https://www.buscape.com.br/search?q={urllib.parse.quote(termo)}"
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=7)
+        resp = scraper.get(url, timeout=10)
         if resp.status_code == 200:
-            soup = BeautifulSoup(resp.content, "html.parser")
-            cards = soup.find_all("div", class_=lambda c: c and "SearchCard_ProductCard" in c)
+            soup = BeautifulSoup(resp.text, "html.parser")
             
+            # Procura os cards de produto do Buscapé
+            cards = soup.find_all("div", class_=lambda c: c and "SearchCard_ProductCard" in c)
             if not cards:
                 cards = soup.find_all("a", class_=lambda c: c and "ProductCard_ProductCard" in c)
 
@@ -89,7 +92,11 @@ def buscar_buscape(termo):
                 if titulo_elem and preco_elem:
                     titulo = titulo_elem.text.strip()
                     preco_txt = preco_elem.text.replace("R$", "").replace(".", "").replace(",", ".").strip()
-                    preco = float(preco_txt)
+                    try:
+                        preco = float(preco_txt)
+                    except ValueError:
+                        continue
+
                     link = "https://www.buscape.com.br" + link_elem['href'] if link_elem and link_elem.get('href', '').startswith('/') else (link_elem['href'] if link_elem else url)
                     imagem = img_elem.get("src", "") if img_elem else ""
 
@@ -98,14 +105,15 @@ def buscar_buscape(termo):
                         "preco": preco,
                         "link": link,
                         "imagem": imagem,
-                        "loja": "Buscapé / Lojas Parceiras (Amazon/Magalu/KaBuM)"
+                        "loja": "Amazon / Magalu / Casas Bahia (via Buscapé)"
                     }
+        else:
+            print(f"Buscapé retornou status: {resp.status_code}")
     except Exception as e:
-        print(f"Erro na busca Buscapé: {e}")
+        print(f"Erro no Buscapé: {e}")
     return None
 
 def buscar_melhor_oferta_multilojas(termo):
-    """Compara ofertas de múltiplos agregadores e retorna a menor encontrada"""
     ofertas = []
     
     ml = buscar_mercadolivre(termo)
@@ -119,16 +127,15 @@ def buscar_melhor_oferta_multilojas(termo):
     if not ofertas:
         return None
 
-    # Ordena pelo menor preço
     ofertas.sort(key=lambda x: x["preco"])
     return ofertas[0]
 
 def buscar_cupons_disponiveis(termo, loja):
     termo_lower = termo.lower()
-    if "samsung" in termo_lower:
+    if "samsung" in termo_lower or "s25" in termo_lower or "s24" in termo_lower:
         return {
             "codigo": "GALAXY10",
-            "descricao": "10% de desconto em smartphones selecionados",
+            "descricao": "10% de desconto na linha Galaxy",
             "tipo": "porcentagem",
             "valor": 10,
             "condicoes": "Válido para compras acima de R$ 1.000,00"
@@ -139,11 +146,11 @@ def buscar_cupons_disponiveis(termo, loja):
             "descricao": "R$ 200,00 de desconto à vista",
             "tipo": "absoluto",
             "valor": 200,
-            "condicoes": "Pagamento no PIX"
+            "condicoes": "Pagamento via PIX"
         }
     return None
 
-# ================= COMANDOS DO TELEGRAM =================
+# ================= COMANDOS TELEGRAM =================
 @bot.message_handler(commands=['start', 'ajuda'])
 def enviar_boas_vindas(message):
     if str(message.chat.id) != CHAT_ID_AUTORIZADO:
@@ -152,7 +159,7 @@ def enviar_boas_vindas(message):
         "🤖 *Bem-vindo ao seu Monitor Multi-Lojas de Preços!*\n\n"
         "🔍 *Pesquisamos em:* Mercado Livre, Amazon, Magalu, Shopee, KaBuM!, Fast Shop e mais.\n\n"
         "📌 *Comandos:*\n"
-        "• Envie o *nome do produto* (ex: `Galaxy S24 Ultra` ou `RTX 4060`) para buscar.\n"
+        "• Envie o *nome do produto* (ex: `S25 Ultra` ou `RTX 4060`) para buscar.\n"
         "• /lista - Gerencia seus produtos cadastrados.\n"
         "• /ofertas - Exibe o relatório com foto, menor preço e cupons ativos."
     )
@@ -237,7 +244,7 @@ def processar_busca(message):
     
     produto = buscar_melhor_oferta_multilojas(termo)
     if not produto:
-        bot.send_message(message.chat.id, "❌ Nenhum produto encontrado com esse nome nas lojas consultadas. Tente resumir o nome (ex: 'S24 Ultra').")
+        bot.send_message(message.chat.id, "❌ Nenhum produto encontrado. Tente resumir o nome.")
         return
 
     fluxo_cadastro[message.chat.id] = produto
@@ -321,5 +328,5 @@ def atualizar_preco_produto(message, idx):
 
 if __name__ == "__main__":
     threading.Thread(target=iniciar_servidor_http, daemon=True).start()
-    print("Bot Multi-Lojas rodando...")
+    print("Bot Multi-Lojas Anti-Block rodando...")
     bot.infinity_polling()
