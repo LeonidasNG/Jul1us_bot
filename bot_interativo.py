@@ -4,6 +4,20 @@ import urllib.parse
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# ================= SERVIDOR DE SAÚDE PARA O RENDER =================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot OK")
+
+def iniciar_servidor_http():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    server.serve_forever()
 
 # ================= CONFIGURAÇÕES =================
 TELEGRAM_TOKEN = "8934299685:AAFnQc6hBF9Um1uhGatlzLROgI33fndAcfQ"
@@ -222,5 +236,7 @@ def atualizar_preco_produto(message, idx):
         bot.send_message(message.chat.id, "❌ Valor inválido. Ação cancelada.")
 
 if __name__ == "__main__":
+    # Inicia o servidor HTTP em background para o Render não falhar
+    threading.Thread(target=iniciar_servidor_http, daemon=True).start()
     print("Bot Interativo rodando...")
     bot.infinity_polling()
