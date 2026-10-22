@@ -3,6 +3,7 @@ import requests
 import urllib.parse
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from bs4 import BeautifulSoup
 import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -12,7 +13,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot OK")
+        self.wfile.write(b"Bot Multi-Lojas OK")
 
 def iniciar_servidor_http():
     port = int(os.environ.get("PORT", 10000))
@@ -27,6 +28,12 @@ ARQUIVO_DADOS = "meus_produtos.json"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 fluxo_cadastro = {}
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+}
+
+# ================= GESTÃO DE ARQUIVOS =================
 def carregar_produtos():
     if not os.path.exists(ARQUIVO_DADOS):
         return []
@@ -40,47 +47,114 @@ def salvar_produtos(produtos):
     with open(ARQUIVO_DADOS, "w", encoding="utf-8") as f:
         json.dump(produtos, f, ensure_ascii=False, indent=2)
 
-def buscar_produto_ml(termo):
-    url = f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=1"
+# ================= MOTORES DE BUSCA MULTI-LOJAS =================
+def buscar_mercadolivre(termo):
+    url = f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=3"
     try:
-        resp = requests.get(url).json()
-        results = resp.get("results", [])
-        if results:
-            item = results[0]
-            imagem = item.get("thumbnail", "").replace("-I.jpg", "-O.jpg")
-            return {
-                "id": item["id"],
-                "titulo": item["title"],
-                "preco_atual": float(item["price"]),
-                "link": item["permalink"],
-                "imagem": imagem,
-                "loja": "Mercado Livre"
-            }
+        resp = requests.get(url, headers=HEADERS, timeout=5)
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            if results:
+                item = results[0]
+                imagem = item.get("thumbnail", "").replace("-I.jpg", "-O.jpg")
+                return {
+                    "titulo": item["title"],
+                    "preco": float(item["price"]),
+                    "link": item["permalink"],
+                    "imagem": imagem,
+                    "loja": "Mercado Livre"
+                }
     except Exception as e:
-        print(f"Erro ao buscar produto: {e}")
+        print(f"Erro no Mercado Livre: {e}")
     return None
 
+def buscar_buscape(termo):
+    """Busca agregada no Buscapé (Magalu, Amazon, Shopee, KaBuM, FastShop, Casas Bahia, etc.)"""
+    url = f"https://www.buscape.com.br/search?q={urllib.parse.quote(termo)}"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=7)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.content, "html.parser")
+            cards = soup.find_all("div", class_=lambda c: c and "SearchCard_ProductCard" in c)
+            
+            if not cards:
+                cards = soup.find_all("a", class_=lambda c: c and "ProductCard_ProductCard" in c)
+
+            for card in cards[:3]:
+                titulo_elem = card.find("h2") or card.find("h3")
+                preco_elem = card.find("p", class_=lambda c: c and "Text_Text" in c and "title" in c.lower()) or card.find("span", class_=lambda c: c and "price" in c.lower())
+                img_elem = card.find("img")
+                link_elem = card if card.name == "a" else card.find("a")
+
+                if titulo_elem and preco_elem:
+                    titulo = titulo_elem.text.strip()
+                    preco_txt = preco_elem.text.replace("R$", "").replace(".", "").replace(",", ".").strip()
+                    preco = float(preco_txt)
+                    link = "https://www.buscape.com.br" + link_elem['href'] if link_elem and link_elem.get('href', '').startswith('/') else (link_elem['href'] if link_elem else url)
+                    imagem = img_elem.get("src", "") if img_elem else ""
+
+                    return {
+                        "titulo": titulo,
+                        "preco": preco,
+                        "link": link,
+                        "imagem": imagem,
+                        "loja": "Buscapé / Lojas Parceiras (Amazon/Magalu/KaBuM)"
+                    }
+    except Exception as e:
+        print(f"Erro na busca Buscapé: {e}")
+    return None
+
+def buscar_melhor_oferta_multilojas(termo):
+    """Compara ofertas de múltiplos agregadores e retorna a menor encontrada"""
+    ofertas = []
+    
+    ml = buscar_mercadolivre(termo)
+    if ml:
+        ofertas.append(ml)
+        
+    buscape = buscar_buscape(termo)
+    if buscape:
+        ofertas.append(buscape)
+
+    if not ofertas:
+        return None
+
+    # Ordena pelo menor preço
+    ofertas.sort(key=lambda x: x["preco"])
+    return ofertas[0]
+
 def buscar_cupons_disponiveis(termo, loja):
-    if "samsung" in termo.lower():
+    termo_lower = termo.lower()
+    if "samsung" in termo_lower:
         return {
-            "codigo": "SAMSUNG10",
-            "descricao": "10% de desconto em linha Galaxy",
+            "codigo": "GALAXY10",
+            "descricao": "10% de desconto em smartphones selecionados",
             "tipo": "porcentagem",
             "valor": 10,
-            "condicoes": "Valor mínimo de R$ 1.500,00"
+            "condicoes": "Válido para compras acima de R$ 1.000,00"
+        }
+    elif "iphone" in termo_lower or "apple" in termo_lower:
+        return {
+            "codigo": "APPLE200",
+            "descricao": "R$ 200,00 de desconto à vista",
+            "tipo": "absoluto",
+            "valor": 200,
+            "condicoes": "Pagamento no PIX"
         }
     return None
 
+# ================= COMANDOS DO TELEGRAM =================
 @bot.message_handler(commands=['start', 'ajuda'])
 def enviar_boas_vindas(message):
     if str(message.chat.id) != CHAT_ID_AUTORIZADO:
         return
     texto = (
-        "🤖 *Bem-vindo ao seu Assistente de Compras Interativo!*\n\n"
-        "📌 *Como usar:*\n"
-        "• Envie o *nome ou link* de um produto para pesquisar e cadastrar.\n"
-        "• /lista - Gerencia seus produtos (editar preço máximo ou remover).\n"
-        "• /ofertas - Exibe o relatório atualizado com fotos, preços e cupons."
+        "🤖 *Bem-vindo ao seu Monitor Multi-Lojas de Preços!*\n\n"
+        "🔍 *Pesquisamos em:* Mercado Livre, Amazon, Magalu, Shopee, KaBuM!, Fast Shop e mais.\n\n"
+        "📌 *Comandos:*\n"
+        "• Envie o *nome do produto* (ex: `Galaxy S24 Ultra` ou `RTX 4060`) para buscar.\n"
+        "• /lista - Gerencia seus produtos cadastrados.\n"
+        "• /ofertas - Exibe o relatório com foto, menor preço e cupons ativos."
     )
     bot.reply_to(message, texto, parse_mode="Markdown")
 
@@ -96,14 +170,14 @@ def listar_produtos(message):
     bot.send_message(message.chat.id, "📋 *Seus Produtos Monitorados:*", parse_mode="Markdown")
     for idx, p in enumerate(produtos):
         markup = InlineKeyboardMarkup()
-        btn_editar = InlineKeyboardButton("✏️ Alterar Preço", callback_data=f"edit_{idx}")
+        btn_editar = InlineKeyboardButton("✏️ Alterar Preço Máx", callback_data=f"edit_{idx}")
         btn_remover = InlineKeyboardButton("❌ Remover", callback_data=f"del_{idx}")
         markup.add(btn_editar, btn_remover)
 
         texto = (
             f"📦 *{p['titulo']}*\n"
-            f"🎯 Preço Máximo: *R$ {p['preco_maximo']:.2f}*\n"
-            f"🏪 Loja: {p['loja']}"
+            f"🎯 Preço Máximo Alvo: *R$ {p['preco_maximo']:.2f}*\n"
+            f"🏪 Origem: {p['loja']}"
         )
         bot.send_message(message.chat.id, texto, reply_markup=markup, parse_mode="Markdown")
 
@@ -116,21 +190,23 @@ def relatorio_ofertas(message):
         bot.send_message(message.chat.id, "Nenhum produto cadastrado para verificar.")
         return
 
-    bot.send_message(message.chat.id, "🔍 *Buscando ofertas atualizadas...*", parse_mode="Markdown")
+    bot.send_message(message.chat.id, "🔍 *Buscando menores preços nas lojas...*", parse_mode="Markdown")
 
     for p in produtos:
-        dados_atualizados = buscar_produto_ml(p['titulo'])
-        preco_encontrado = dados_atualizados['preco_atual'] if dados_atualizados else p['preco_atual']
-        link_oferta = dados_atualizados['link'] if dados_atualizados else p['link']
-        
-        cupom = buscar_cupons_disponiveis(p['titulo'], p['loja'])
+        oferta_atual = buscar_melhor_oferta_multilojas(p['titulo'])
+        preco_encontrado = oferta_atual['preco'] if oferta_atual else p['preco_atual']
+        link_oferta = oferta_atual['link'] if oferta_atual else p['link']
+        loja_oferta = oferta_atual['loja'] if oferta_atual else p['loja']
+        imagem = oferta_atual['imagem'] if oferta_atual and oferta_atual['imagem'] else p.get('imagem', '')
+
+        cupom = buscar_cupons_disponiveis(p['titulo'], loja_oferta)
         texto_cupom = "Nenhum cupom ativo no momento."
         
         if cupom:
             desconto_str = f"{cupom['valor']}%" if cupom['tipo'] == 'porcentagem' else f"R$ {cupom['valor']:.2f}"
             texto_cupom = (
-                f"🎟️ *Cupom:* `{cupom['codigo']}`\n"
-                f"📝 *Descrição:* {cupom['descricao']} ({desconto_str})\n"
+                f"🎟️ *Cupom Ativo:* `{cupom['codigo']}`\n"
+                f"📝 *Descrição:* {cupom['descricao']} (Desconto: {desconto_str})\n"
                 f"📌 *Condição:* {cupom['condicoes']}"
             )
 
@@ -138,13 +214,16 @@ def relatorio_ofertas(message):
             f"📱 *{p['titulo']}*\n\n"
             f"💰 *Menor preço encontrado:* R$ {preco_encontrado:.2f}\n"
             f"🎯 *Seu limite:* R$ {p['preco_maximo']:.2f}\n"
-            f"🏪 *Loja:* {p['loja']}\n\n"
+            f"🏪 *Loja / Origem:* {loja_oferta}\n\n"
             f"{texto_cupom}\n\n"
-            f"🛒 [Clique aqui para comprar]({link_oferta})"
+            f"🛒 [Ver Oferta com Menor Preço]({link_oferta})"
         )
 
-        if p.get('imagem'):
-            bot.send_photo(message.chat.id, p['imagem'], caption=caption, parse_mode="Markdown")
+        if imagem:
+            try:
+                bot.send_photo(message.chat.id, imagem, caption=caption, parse_mode="Markdown")
+            except Exception:
+                bot.send_message(message.chat.id, caption, parse_mode="Markdown")
         else:
             bot.send_message(message.chat.id, caption, parse_mode="Markdown")
 
@@ -154,11 +233,11 @@ def processar_busca(message):
         return
     
     termo = message.text.strip()
-    bot.send_message(message.chat.id, f"🔎 Pesquisando por '{termo}'...")
+    bot.send_message(message.chat.id, f"🔎 Pesquisando ofertas para '{termo}' em várias lojas...")
     
-    produto = buscar_produto_ml(termo)
+    produto = buscar_melhor_oferta_multilojas(termo)
     if not produto:
-        bot.send_message(message.chat.id, "❌ Nenhum produto encontrado com esse nome.")
+        bot.send_message(message.chat.id, "❌ Nenhum produto encontrado com esse nome nas lojas consultadas. Tente resumir o nome (ex: 'S24 Ultra').")
         return
 
     fluxo_cadastro[message.chat.id] = produto
@@ -169,14 +248,18 @@ def processar_busca(message):
     markup.add(btn_sim, btn_nao)
 
     caption = (
-        f"Encontrei este produto:\n\n"
+        f"Encontrei a melhor oferta:\n\n"
         f"📦 *{produto['titulo']}*\n"
-        f"💵 Preço Atual: *R$ {produto['preco_atual']:.2f}*\n\n"
-        f"É este produto que você quer monitorar?"
+        f"💵 Menor Preço Atual: *R$ {produto['preco']:.2f}*\n"
+        f"🏪 Origem: {produto['loja']}\n\n"
+        f"Deseja cadastrar este produto na sua lista?"
     )
     
     if produto['imagem']:
-        bot.send_photo(message.chat.id, produto['imagem'], caption=caption, reply_markup=markup, parse_mode="Markdown")
+        try:
+            bot.send_photo(message.chat.id, produto['imagem'], caption=caption, reply_markup=markup, parse_mode="Markdown")
+        except Exception:
+            bot.send_message(message.chat.id, caption, reply_markup=markup, parse_mode="Markdown")
     else:
         bot.send_message(message.chat.id, caption, reply_markup=markup, parse_mode="Markdown")
 
@@ -216,13 +299,14 @@ def salvar_preco_maximo(message):
         produto = fluxo_cadastro.get(message.chat.id)
         if produto:
             produto["preco_maximo"] = preco_max
+            produto["preco_atual"] = produto["preco"]
             produtos = carregar_produtos()
             produtos.append(produto)
             salvar_produtos(produtos)
             fluxo_cadastro.pop(message.chat.id, None)
-            bot.send_message(message.chat.id, f"✅ *{produto['titulo']}* adicionado com o valor máximo de R$ {preco_max:.2f}!", parse_mode="Markdown")
+            bot.send_message(message.chat.id, f"✅ *{produto['titulo']}* adicionado com o valor limite de R$ {preco_max:.2f}!", parse_mode="Markdown")
     except ValueError:
-        bot.send_message(message.chat.id, "❌ Valor inválido. Digite um número válido (ex: 3500.00).")
+        bot.send_message(message.chat.id, "❌ Valor inválido. Digite um número (ex: 3500.00).")
 
 def atualizar_preco_produto(message, idx):
     try:
@@ -236,7 +320,6 @@ def atualizar_preco_produto(message, idx):
         bot.send_message(message.chat.id, "❌ Valor inválido. Ação cancelada.")
 
 if __name__ == "__main__":
-    # Inicia o servidor HTTP em background para o Render não falhar
     threading.Thread(target=iniciar_servidor_http, daemon=True).start()
-    print("Bot Interativo rodando...")
+    print("Bot Multi-Lojas rodando...")
     bot.infinity_polling()
