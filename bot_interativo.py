@@ -223,8 +223,7 @@ def _novo_item(titulo, preco, link, imagem):
 
 def candidatos_api(termo):
     url = (
-        "https://api.mercadolibre.com/sites/MLB/search?q="
-        f"{urllib.parse.quote(termo)}&limit=10"
+        f"https://api.mercadolibre.com/sites/MLB/search?q={urllib.parse.quote(termo)}&limit=10"
     )
     headers = {
         "Accept": "application/json",
