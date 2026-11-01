@@ -232,7 +232,7 @@ def candidatos_api(termo):
             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         ),
     }
-    resp = session.get(url, headers=headers, timeout=12)
+    resp = session.get(url, headers=headers, timeout=1000)
     print(f"[ML API] HTTP {resp.status_code}")
     if resp.status_code != 200:
         return []
@@ -253,7 +253,7 @@ def candidatos_web(termo):
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
         "Referer": "https://www.mercadolivre.com.br/",
     }
-    resp = session.get(url, headers=headers, timeout=15)
+    resp = session.get(url, headers=headers, timeout=1000)
     print(f"[ML WEB] HTTP {resp.status_code}")
     if resp.status_code != 200:
         return []
